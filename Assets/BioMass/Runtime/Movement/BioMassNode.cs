@@ -56,9 +56,6 @@ namespace BioMass.Runtime.Movement
             if (_collider != null)
                 _collider.enabled = false;
 
-            foreach (SpringJoint spring in GetComponents<SpringJoint>())
-                spring.enabled = false;
-
             Body.linearVelocity = Vector3.zero;
             Body.angularVelocity = Vector3.zero;
             Body.detectCollisions = false;
@@ -89,9 +86,6 @@ namespace BioMass.Runtime.Movement
             foreach (Renderer renderer in _renderers)
                 if (renderer != null)
                     renderer.enabled = true;
-
-            foreach (SpringJoint spring in GetComponents<SpringJoint>())
-                spring.enabled = true;
 
             if (_collider != null)
                 _collider.enabled = true;
