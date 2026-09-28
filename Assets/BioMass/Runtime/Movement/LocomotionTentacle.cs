@@ -11,7 +11,7 @@ namespace BioMass.Runtime.Movement
 
         [Header("Search")]
         [SerializeField, Min(0.2f)] private float searchRadius = 3.25f;
-        [SerializeField, Range(8, 48)] private int searchSamples = 24;
+        [SerializeField, Range(8, 48)] private int searchSamples = 26;
         [SerializeField] private LayerMask surfaceMask = ~0;
         [SerializeField, Min(0f)] private float anchorSpacing = 0.72f;
 
@@ -23,10 +23,8 @@ namespace BioMass.Runtime.Movement
         [SerializeField, Min(0.01f)] private float minHoldTime = 0.09f;
         [SerializeField, Min(0.01f)] private float releaseTime = 0.055f;
 
-        [Header("Debug Presentation")]
+        [Header("Prototype Presentation")]
         [SerializeField] private LineRenderer lineRenderer;
-        [SerializeField, Range(4, 20)] private int lineSegments = 9;
-        [SerializeField, Min(0.001f)] private float lineWidth = 0.055f;
 
         private BioMassController _controller;
         private BioMassNode _sourceNode;
@@ -37,11 +35,19 @@ namespace BioMass.Runtime.Movement
         private Vector3 _tip;
         private float _stateTime;
         private float _phase;
+        private int _shapeStyle;
+        private int _lineSegments = 10;
+        private float _lineWidth = 0.055f;
+        private float _curveStrength = 0.12f;
+        private Vector3 _territorySeed;
+
         private readonly RaycastHit[] _searchHitBuffer = new RaycastHit[32];
         private static Material s_DebugLineMaterial;
 
         public bool IsAttached => _state == TentacleState.Attached;
-        public Vector3 CurrentAnchor => _anchorCollider != null ? _anchorCollider.transform.TransformPoint(_anchorLocalPoint) : _tip;
+        public Vector3 CurrentAnchor => _anchorCollider != null
+            ? _anchorCollider.transform.TransformPoint(_anchorLocalPoint)
+            : _tip;
         public Vector3 CurrentAnchorNormal => _anchorCollider != null
             ? _anchorCollider.transform.TransformDirection(_anchorLocalNormal).normalized
             : Vector3.up;
@@ -50,14 +56,31 @@ namespace BioMass.Runtime.Movement
         private void Awake() => EnsureLineRenderer();
         private void OnEnable() => EnsureLineRenderer();
 
-        public void Initialize(BioMassController controller, BioMassNode sourceNode, float phase)
+        public void Initialize(BioMassController controller, BioMassNode sourceNode, int index, int totalCount)
         {
             _controller = controller;
             _sourceNode = sourceNode;
-            _phase = phase;
+
+            int count = Mathf.Max(1, totalCount);
+            _phase = index / (float)count;
+            _shapeStyle = index % 6;
+            _lineSegments = 8 + (index % 5) * 2;
+            _lineWidth = 0.038f + (index % 4) * 0.013f;
+            _curveStrength = 0.075f + (index % 5) * 0.025f;
+            _territorySeed = FibonacciDirection(index, count);
+
             _tip = sourceNode.transform.position;
             _state = TentacleState.Searching;
+
             EnsureLineRenderer();
+            ApplyShapeSettings();
+        }
+
+        public void ForceRelease()
+        {
+            _anchorCollider = null;
+            _tip = _sourceNode != null ? _sourceNode.transform.position : transform.position;
+            ChangeState(TentacleState.Searching);
         }
 
         private void FixedUpdate()
@@ -65,14 +88,28 @@ namespace BioMass.Runtime.Movement
             if (_controller == null || _sourceNode == null || _sourceNode.Body == null)
                 return;
 
+            if (_sourceNode.IsReforming)
+            {
+                ForceRelease();
+                return;
+            }
+
             _stateTime += Time.fixedDeltaTime;
 
             switch (_state)
             {
-                case TentacleState.Searching: TryAcquireAnchor(); break;
-                case TentacleState.Extending: UpdateExtension(); break;
-                case TentacleState.Attached: UpdateAttached(); break;
-                case TentacleState.Releasing: UpdateRelease(); break;
+                case TentacleState.Searching:
+                    TryAcquireAnchor();
+                    break;
+                case TentacleState.Extending:
+                    UpdateExtension();
+                    break;
+                case TentacleState.Attached:
+                    UpdateAttached();
+                    break;
+                case TentacleState.Releasing:
+                    UpdateRelease();
+                    break;
             }
         }
 
@@ -83,16 +120,22 @@ namespace BioMass.Runtime.Movement
             Vector3 source = _sourceNode.Body.worldCenterOfMass;
             Vector3 desired = _controller.DesiredWorldDirection;
             Vector3 normal = _controller.SurfaceNormal;
+            Vector3 territory = GetTerritoryDirection(normal, desired);
 
             float bestScore = float.NegativeInfinity;
             RaycastHit bestHit = default;
 
             for (int i = 0; i < searchSamples; i++)
             {
-                Vector3 baseDir = FibonacciDirection((i + Mathf.RoundToInt(_phase * 17f)) % searchSamples, searchSamples);
-                Vector3 preferredDirection = desired.sqrMagnitude > 0.01f ? desired : -normal;
-                Vector3 movementBiased = Vector3.Slerp(baseDir, preferredDirection, 0.40f);
-                Vector3 dir = movementBiased.normalized;
+                Vector3 baseDir = FibonacciDirection(
+                    (i + Mathf.RoundToInt(_phase * searchSamples)) % searchSamples,
+                    searchSamples);
+
+                float movementBias = _controller.IsSurfaceTransitioning ? 0.42f : 0.22f;
+                Vector3 preferred = desired.sqrMagnitude > 0.01f ? desired : -normal;
+
+                Vector3 dir = Vector3.Slerp(baseDir, territory, 0.32f);
+                dir = Vector3.Slerp(dir, preferred, movementBias).normalized;
 
                 int hitCount = Physics.SphereCastNonAlloc(
                     source,
@@ -110,7 +153,9 @@ namespace BioMass.Runtime.Movement
                 for (int hitIndex = 0; hitIndex < hitCount; hitIndex++)
                 {
                     RaycastHit hit = _searchHitBuffer[hitIndex];
-                    if (hit.collider == null || hit.collider.transform.IsChildOf(_controller.transform))
+
+                    if (hit.collider == null ||
+                        hit.collider.transform.IsChildOf(_controller.transform))
                         continue;
 
                     if (hit.distance < candidateDistance)
@@ -124,7 +169,13 @@ namespace BioMass.Runtime.Movement
                 if (!foundEnvironmentHit)
                     continue;
 
-                float score = ScoreAnchor(source, candidateHit, desired, normal);
+                float score = ScoreAnchor(
+                    source,
+                    candidateHit,
+                    desired,
+                    normal,
+                    territory);
+
                 if (score <= bestScore)
                     continue;
 
@@ -132,7 +183,7 @@ namespace BioMass.Runtime.Movement
                 bestHit = candidateHit;
             }
 
-            if (bestScore < 0.22f || bestHit.collider == null)
+            if (bestScore < 0.18f || bestHit.collider == null)
                 return;
 
             _anchorCollider = bestHit.collider;
@@ -142,33 +193,84 @@ namespace BioMass.Runtime.Movement
             ChangeState(TentacleState.Extending);
         }
 
-        private float ScoreAnchor(Vector3 source, RaycastHit hit, Vector3 desired, Vector3 surfaceNormal)
+        private Vector3 GetTerritoryDirection(Vector3 surfaceNormal, Vector3 desired)
+        {
+            Vector3 normal = surfaceNormal.sqrMagnitude > 0.001f
+                ? surfaceNormal.normalized
+                : Vector3.up;
+
+            Vector3 forward = desired.sqrMagnitude > 0.01f
+                ? Vector3.ProjectOnPlane(desired, normal)
+                : Vector3.ProjectOnPlane(Vector3.forward, normal);
+
+            if (forward.sqrMagnitude < 0.01f)
+                forward = Vector3.ProjectOnPlane(Vector3.right, normal);
+
+            forward.Normalize();
+            Vector3 right = Vector3.Cross(normal, forward).normalized;
+
+            float angle = _phase * Mathf.PI * 2f;
+            Vector3 radial = forward * Mathf.Cos(angle) + right * Mathf.Sin(angle);
+
+            float normalBias = Mathf.Lerp(0.38f, 0.68f, (_territorySeed.y + 1f) * 0.5f);
+            return (radial * (1f - normalBias) - normal * normalBias).normalized;
+        }
+
+        private float ScoreAnchor(
+            Vector3 source,
+            RaycastHit hit,
+            Vector3 desired,
+            Vector3 surfaceNormal,
+            Vector3 territory)
         {
             Vector3 to = hit.point - source;
+            if (to.sqrMagnitude < 0.0001f)
+                return float.NegativeInfinity;
+
+            Vector3 toDirection = to.normalized;
             float distanceScore = 1f - Mathf.Clamp01(to.magnitude / searchRadius);
 
             float movementScore = desired.sqrMagnitude > 0.01f
-                ? Mathf.InverseLerp(-0.35f, 1f, Vector3.Dot(to.normalized, desired.normalized))
+                ? Mathf.InverseLerp(-0.45f, 1f, Vector3.Dot(toDirection, desired.normalized))
                 : 0.5f;
+
+            float territoryScore = Mathf.InverseLerp(
+                -0.45f,
+                1f,
+                Vector3.Dot(toDirection, territory));
 
             float forwardSurfaceScore = desired.sqrMagnitude > 0.01f
                 ? Mathf.Clamp01(Vector3.Dot(desired.normalized, -hit.normal))
                 : 0f;
 
-            float currentSurfaceScore = Mathf.InverseLerp(-0.4f, 1f, Vector3.Dot(hit.normal, surfaceNormal));
+            float currentSurfaceScore = Mathf.InverseLerp(
+                -0.4f,
+                1f,
+                Vector3.Dot(hit.normal, surfaceNormal));
+
             float transitionSurfaceScore = _controller.IsSurfaceTransitioning
                 ? Mathf.Clamp01(Vector3.Dot(hit.normal, _controller.TransitionNormal))
                 : 0f;
 
-            float spacingScore = _controller.GetAnchorSpacingScore(hit.point, this, anchorSpacing);
-            float noise = Mathf.PerlinNoise(_phase * 13.1f, Time.time * 0.17f) * 0.10f;
+            float spacingScore = _controller.GetAnchorSpacingScore(
+                hit.point,
+                this,
+                anchorSpacing);
 
-            return distanceScore * 0.20f
-                 + movementScore * 0.29f
-                 + forwardSurfaceScore * 0.18f
-                 + currentSurfaceScore * 0.08f
-                 + transitionSurfaceScore * 0.14f
-                 + spacingScore * 0.11f
+            float noise = Mathf.PerlinNoise(
+                _phase * 13.1f,
+                Time.time * 0.17f) * 0.08f;
+
+            float movementWeight = _controller.IsSurfaceTransitioning ? 0.25f : 0.13f;
+            float transitionWeight = _controller.IsSurfaceTransitioning ? 0.16f : 0.04f;
+
+            return distanceScore * 0.16f
+                 + movementScore * movementWeight
+                 + territoryScore * 0.30f
+                 + forwardSurfaceScore * 0.08f
+                 + currentSurfaceScore * 0.07f
+                 + transitionSurfaceScore * transitionWeight
+                 + spacingScore * 0.14f
                  + noise;
         }
 
@@ -181,7 +283,10 @@ namespace BioMass.Runtime.Movement
             }
 
             Vector3 anchor = CurrentAnchor;
-            _tip = Vector3.MoveTowards(_tip, anchor, extensionSpeed * Time.fixedDeltaTime);
+            _tip = Vector3.MoveTowards(
+                _tip,
+                anchor,
+                extensionSpeed * Time.fixedDeltaTime);
 
             if ((_tip - anchor).sqrMagnitude <= 0.02f * 0.02f)
                 ChangeState(TentacleState.Attached);
@@ -198,14 +303,22 @@ namespace BioMass.Runtime.Movement
             Vector3 source = _sourceNode.Body.worldCenterOfMass;
             Vector3 anchor = CurrentAnchor;
             _tip = anchor;
+
             Vector3 toAnchor = anchor - source;
             float distance = toAnchor.magnitude;
 
             if (distance > 0.001f)
             {
                 float stretch = Mathf.Max(0f, distance - idealPullDistance);
+
                 float intent = _controller.DesiredWorldDirection.sqrMagnitude > 0.01f
-                    ? Mathf.Lerp(0.62f, 1.35f, Mathf.Clamp01((Vector3.Dot(toAnchor.normalized, _controller.DesiredWorldDirection) + 1f) * 0.5f))
+                    ? Mathf.Lerp(
+                        0.62f,
+                        1.35f,
+                        Mathf.Clamp01(
+                            (Vector3.Dot(
+                                toAnchor.normalized,
+                                _controller.DesiredWorldDirection) + 1f) * 0.5f))
                     : 0.48f;
 
                 _sourceNode.Body.AddForceAtPosition(
@@ -214,20 +327,32 @@ namespace BioMass.Runtime.Movement
                     ForceMode.Acceleration);
             }
 
-            bool behind = _controller.DesiredWorldDirection.sqrMagnitude > 0.01f &&
-                          Vector3.Dot((anchor - _controller.CenterOfMass).normalized, _controller.DesiredWorldDirection) < -0.48f;
+            bool behind =
+                _controller.DesiredWorldDirection.sqrMagnitude > 0.01f &&
+                Vector3.Dot(
+                    (anchor - _controller.CenterOfMass).normalized,
+                    _controller.DesiredWorldDirection) < -0.60f;
 
-            bool wrongTransitionSurface = _controller.IsSurfaceTransitioning &&
-                                          Vector3.Dot(CurrentAnchorNormal, _controller.TransitionNormal) < 0.30f;
+            bool wrongTransitionSurface =
+                _controller.IsSurfaceTransitioning &&
+                Vector3.Dot(
+                    CurrentAnchorNormal,
+                    _controller.TransitionNormal) < 0.30f;
 
-            if (_stateTime >= minHoldTime && (distance > releaseDistance || behind || wrongTransitionSurface))
+            if (_stateTime >= minHoldTime &&
+                (distance > releaseDistance || behind || wrongTransitionSurface))
+            {
                 ChangeState(TentacleState.Releasing);
+            }
         }
 
         private void UpdateRelease()
         {
             Vector3 source = _sourceNode.Body.worldCenterOfMass;
-            _tip = Vector3.Lerp(_tip, source, 1f - Mathf.Exp(-26f * Time.fixedDeltaTime));
+            _tip = Vector3.Lerp(
+                _tip,
+                source,
+                1f - Mathf.Exp(-26f * Time.fixedDeltaTime));
 
             if (_stateTime >= releaseTime)
             {
@@ -252,10 +377,8 @@ namespace BioMass.Runtime.Movement
                 return;
 
             lineRenderer.useWorldSpace = true;
-            lineRenderer.positionCount = lineSegments;
-            lineRenderer.widthMultiplier = lineWidth;
             lineRenderer.numCapVertices = 4;
-            lineRenderer.numCornerVertices = 3;
+            lineRenderer.numCornerVertices = 4;
             lineRenderer.shadowCastingMode = ShadowCastingMode.Off;
             lineRenderer.receiveShadows = false;
 
@@ -264,15 +387,23 @@ namespace BioMass.Runtime.Movement
                 Shader shader = GraphicsSettings.currentRenderPipeline != null
                     ? Shader.Find("Universal Render Pipeline/Unlit")
                     : Shader.Find("Sprites/Default");
+
                 shader ??= Shader.Find("Sprites/Default");
 
                 if (shader != null)
                 {
-                    s_DebugLineMaterial = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
+                    s_DebugLineMaterial = new Material(shader)
+                    {
+                        hideFlags = HideFlags.HideAndDontSave
+                    };
+
+                    Color color = new(0.35f, 0.015f, 0.02f, 1f);
+
                     if (s_DebugLineMaterial.HasProperty("_BaseColor"))
-                        s_DebugLineMaterial.SetColor("_BaseColor", new Color(0.35f, 0.015f, 0.02f, 1f));
+                        s_DebugLineMaterial.SetColor("_BaseColor", color);
+
                     if (s_DebugLineMaterial.HasProperty("_Color"))
-                        s_DebugLineMaterial.SetColor("_Color", new Color(0.35f, 0.015f, 0.02f, 1f));
+                        s_DebugLineMaterial.SetColor("_Color", color);
                 }
             }
 
@@ -280,50 +411,157 @@ namespace BioMass.Runtime.Movement
                 lineRenderer.sharedMaterial = s_DebugLineMaterial;
         }
 
+        private void ApplyShapeSettings()
+        {
+            if (lineRenderer == null)
+                return;
+
+            lineRenderer.positionCount = _lineSegments;
+            lineRenderer.widthMultiplier = _lineWidth;
+
+            switch (_shapeStyle)
+            {
+                case 0:
+                    lineRenderer.widthCurve = new AnimationCurve(
+                        new Keyframe(0f, 0.9f),
+                        new Keyframe(0.72f, 0.72f),
+                        new Keyframe(1f, 0.18f));
+                    break;
+
+                case 1:
+                    lineRenderer.widthCurve = new AnimationCurve(
+                        new Keyframe(0f, 0.55f),
+                        new Keyframe(0.32f, 1f),
+                        new Keyframe(1f, 0.12f));
+                    break;
+
+                case 2:
+                    lineRenderer.widthCurve = new AnimationCurve(
+                        new Keyframe(0f, 0.75f),
+                        new Keyframe(0.5f, 0.52f),
+                        new Keyframe(0.82f, 0.90f),
+                        new Keyframe(1f, 0.16f));
+                    break;
+
+                default:
+                    lineRenderer.widthCurve = new AnimationCurve(
+                        new Keyframe(0f, 0.68f),
+                        new Keyframe(0.45f, 0.86f),
+                        new Keyframe(1f, 0.14f));
+                    break;
+            }
+        }
+
         private void DrawTentacle()
         {
             if (lineRenderer == null || _sourceNode == null)
                 return;
 
+            if (_sourceNode.IsReforming)
+            {
+                lineRenderer.enabled = false;
+                return;
+            }
+
             Vector3 start = _sourceNode.transform.position;
-            Vector3 end = _state == TentacleState.Searching ? Vector3.Lerp(_tip, start, 0.4f) : _tip;
-            lineRenderer.enabled = _controller == null || _controller.DebugPresentationEnabled;
+            Vector3 end = _state == TentacleState.Searching
+                ? Vector3.Lerp(_tip, start, 0.4f)
+                : _tip;
+
+            lineRenderer.enabled =
+                _controller == null || _controller.DebugPresentationEnabled;
 
             if (!lineRenderer.enabled)
                 return;
 
-            lineRenderer.positionCount = lineSegments;
+            lineRenderer.positionCount = _lineSegments;
             Vector3 axis = end - start;
 
             if (axis.sqrMagnitude < 0.0001f)
             {
-                for (int i = 0; i < lineSegments; i++)
+                for (int i = 0; i < _lineSegments; i++)
                     lineRenderer.SetPosition(i, start);
                 return;
             }
 
-            Vector3 side = Vector3.Cross(axis.normalized, _controller != null ? _controller.SurfaceNormal : Vector3.up);
-            if (side.sqrMagnitude < 0.001f)
-                side = Vector3.Cross(axis.normalized, Vector3.right);
-            side.Normalize();
+            Vector3 axisN = axis.normalized;
+            Vector3 reference =
+                Mathf.Abs(Vector3.Dot(axisN, _controller.SurfaceNormal)) > 0.88f
+                    ? Vector3.right
+                    : _controller.SurfaceNormal;
 
-            for (int i = 0; i < lineSegments; i++)
+            Vector3 sideA = Vector3.Cross(axisN, reference).normalized;
+            if (sideA.sqrMagnitude < 0.001f)
+                sideA = Vector3.Cross(axisN, Vector3.forward).normalized;
+
+            Vector3 sideB = Vector3.Cross(axisN, sideA).normalized;
+
+            for (int i = 0; i < _lineSegments; i++)
             {
-                float t = i / (float)(lineSegments - 1);
-                float wave = Mathf.Sin(t * Mathf.PI) * Mathf.Sin(Time.time * 8f + _phase * 9f) * 0.11f;
-                float sag = Mathf.Sin(t * Mathf.PI) * 0.08f;
-                Vector3 point = Vector3.Lerp(start, end, t) + side * wave + Vector3.down * sag;
+                float t = i / (float)(_lineSegments - 1);
+                float envelope = Mathf.Sin(t * Mathf.PI);
+                float waveA = 0f;
+                float waveB = 0f;
+
+                switch (_shapeStyle)
+                {
+                    case 0:
+                        waveA = Mathf.Sin(t * Mathf.PI * 2f + _phase * 9f) * envelope;
+                        waveB = Mathf.Sin(t * Mathf.PI + _phase * 4f) * envelope * 0.25f;
+                        break;
+
+                    case 1:
+                        waveA = Mathf.Sin(t * Mathf.PI * 3f + _phase * 7f) * envelope * 0.55f;
+                        waveB = Mathf.Cos(t * Mathf.PI * 2f + _phase * 5f) * envelope * 0.48f;
+                        break;
+
+                    case 2:
+                        waveA = Mathf.Cos(t * Mathf.PI * 4f + Time.time * 1.7f + _phase * 8f) * envelope * 0.42f;
+                        waveB = Mathf.Sin(t * Mathf.PI * 4f + Time.time * 1.7f + _phase * 8f) * envelope * 0.42f;
+                        break;
+
+                    case 3:
+                        waveA = Mathf.Sin(t * Mathf.PI + _phase * 6f) * envelope * (0.35f + t * 0.9f);
+                        waveB = Mathf.Sin(t * Mathf.PI * 5f + _phase * 3f) * envelope * 0.18f;
+                        break;
+
+                    case 4:
+                        waveA = Mathf.Sin(t * Mathf.PI * 5f + _phase * 11f) * envelope * 0.25f;
+                        waveB = Mathf.Sin((t + 0.22f) * Mathf.PI * 2f + _phase * 9f) * envelope * 0.62f;
+                        break;
+
+                    default:
+                        waveA = Mathf.Sin(t * Mathf.PI * 2f + Time.time * 3.4f + _phase * 10f) * envelope * 0.60f;
+                        waveB = Mathf.Cos(t * Mathf.PI * 3f - Time.time * 2.3f + _phase * 5f) * envelope * 0.33f;
+                        break;
+                }
+
+                float twitch =
+                    Mathf.Sin(Time.time * (5.5f + _shapeStyle * 0.3f) +
+                              t * 6f + _phase * 12f) * 0.018f * envelope;
+
+                Vector3 point = Vector3.Lerp(start, end, t);
+                point += sideA * waveA * _curveStrength;
+                point += sideB * waveB * _curveStrength;
+                point += sideB * twitch;
+                point += Vector3.down * envelope * 0.035f;
+
                 lineRenderer.SetPosition(i, point);
             }
         }
 
         private static Vector3 FibonacciDirection(int index, int count)
         {
+            count = Mathf.Max(1, count);
             float offset = 2f / count;
             float y = index * offset - 1f + offset * 0.5f;
             float r = Mathf.Sqrt(Mathf.Max(0f, 1f - y * y));
             float phi = index * Mathf.PI * (3f - Mathf.Sqrt(5f));
-            return new Vector3(Mathf.Cos(phi) * r, y, Mathf.Sin(phi) * r);
+
+            return new Vector3(
+                Mathf.Cos(phi) * r,
+                y,
+                Mathf.Sin(phi) * r);
         }
     }
 }
