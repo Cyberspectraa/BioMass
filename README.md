@@ -2,7 +2,7 @@
 
 **bioMass** is a 3D reverse-horror game built in Unity 6.6 (6000.6.3f1). The player controls the *intent* of a sentient biological mass rather than directly animating limbs. Locomotion is generated from a small physics simulation, surface sensing, adhesion, asynchronous anchor tendrils, momentum and deformation.
 
-## Current milestone — Movement Foundation v0.1.1
+## Current milestone — Movement Foundation v0.1.2
 
 Implemented:
 
@@ -20,16 +20,25 @@ Implemented:
 - Toggleable debug overlays / gizmos
 - Editor command that creates a repeatable movement test chamber
 
+### v0.1.2 play-test fixes
+
+- Makes `LineRenderer` mandatory on locomotion tendrils and creates it before the tentacle script.
+- Enlarges surface-query buffers so the creature's own colliders cannot crowd out floor and wall hits.
+- Makes tendril anchor searches look past the creature's own colliders instead of failing on the first self-hit.
+- Makes Rigidbody access lazy-safe so initialization no longer depends on Unity's Awake ordering.
+- Makes debug materials match the actually active render pipeline, preventing magenta geometry when URP is installed but not active.
+- Adds raw movement input to the debug HUD.
+
 The visible node spheres and LineRenderer tendrils are development/debug representations only. They are intentionally isolated from the simulation architecture so later procedural flesh and spline-mesh tendrils can replace them without rewriting locomotion.
 
 ## Open it
 
 1. Install Unity 6000.6.3f1 in Unity Hub.
 2. Add this folder as an existing project.
-3. Allow Unity to resolve packages. The project pins `com.unity.inputsystem` to **1.20.0**, the Unity 6000.6-compatible release.
-4. In Unity choose **bioMass > Build / Rebuild Movement Lab**.
-5. Open `Assets/BioMass/Scenes/MovementLab.unity` if it is not opened automatically.
-6. Enter Play Mode.
+3. Allow Unity to resolve packages. The project pins `com.unity.inputsystem` to **1.20.0**.
+4. Enable the new Input System if Unity prompts, then restart the editor.
+5. In Unity choose **bioMass > Build / Rebuild Movement Lab**.
+6. Enter Play Mode and click the Game view once before testing keyboard input.
 
 ## Controls
 
@@ -38,6 +47,8 @@ The visible node spheres and LineRenderer tendrils are development/debug represe
 - Mouse / gamepad right stick — orbit camera
 - `F1` — toggle debug visuals
 - `R` — reset creature to the lab spawn
+
+The debug HUD shows raw movement input. Pressing W should display approximately `Input: 0.00, 1.00`.
 
 ## Architecture rule
 
