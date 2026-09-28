@@ -2,7 +2,7 @@
 
 **bioMass** is a 3D reverse-horror game built in Unity 6.6 (6000.6.3f1). The player controls the *intent* of a sentient biological mass rather than directly animating limbs. Locomotion is generated from a small physics simulation, surface sensing, adhesion, asynchronous anchor tendrils, momentum and deformation.
 
-## Current milestone — Movement Foundation v0.1.4
+## Current milestone — Movement Foundation v0.1.4.1
 
 Implemented:
 
@@ -79,3 +79,10 @@ After updating these scripts, run **bioMass > Build / Rebuild Movement Lab** aga
 - The debug HUD now reports how many nodes are currently reforming.
 
 After updating, run **bioMass > Build / Rebuild Movement Lab** again so the generated test scene receives the latest serialized defaults.
+
+
+### v0.1.4.1 compile fix
+
+- Fixes Unity 6.6 compilation errors caused by treating `SpringJoint` as if it had an `enabled` property.
+- Biomass reformation now suspends spring forces by caching and temporarily neutralising each affected spring's force/range settings.
+- The exact spring settings are restored when the detached biomass node reforms.
