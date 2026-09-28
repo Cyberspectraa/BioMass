@@ -172,7 +172,10 @@ namespace BioMass.Runtime.Movement
                     continue;
 
                 if (node.IsReforming)
+                {
                     node.EndReform(Vector3.zero);
+                    SetInboundSpringsForNode(node, true);
+                }
 
                 Vector3 offset = _spawnOffsets.TryGetValue(node, out Vector3 saved) ? saved : Vector3.zero;
                 node.Body.position = transform.TransformPoint(offset);
