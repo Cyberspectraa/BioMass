@@ -37,7 +37,7 @@ namespace BioMass.Editor
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
             Selection.activeGameObject = creature.gameObject;
             EditorGUIUtility.PingObject(creature.gameObject);
-            Debug.Log("bioMass Movement Lab rebuilt. Enter Play Mode and use WASD to move, RMB to orbit, F1 for debug and R to reset.");
+            Debug.Log("bioMass Movement Lab rebuilt. v0.1.3 traversal tuning active: faster Stage 1 movement, compact body and floor/wall/ceiling transitions.");
         }
 
         private static void EnsureFolders()
@@ -95,7 +95,7 @@ namespace BioMass.Editor
         private static BioMassController CreateCreature(Material material)
         {
             GameObject root = new GameObject("bioMass_Player");
-            root.transform.position = new Vector3(0f, 1.35f, -4f);
+            root.transform.position = new Vector3(0f, 1.25f, -4f);
 
             BioMassInputReader input = root.AddComponent<BioMassInputReader>();
             root.AddComponent<BioMassSurfaceSensor>();
@@ -103,11 +103,18 @@ namespace BioMass.Editor
 
             Vector3[] offsets =
             {
-                new(0f, 0f, 0f), new(0.65f, 0.05f, 0.05f), new(-0.65f, 0.05f, 0.05f),
-                new(0.12f, 0.46f, 0.35f), new(-0.12f, -0.35f, 0.42f), new(0.46f, 0.24f, -0.45f),
-                new(-0.48f, 0.18f, -0.42f), new(0.25f, -0.30f, -0.35f), new(-0.28f, -0.28f, -0.30f)
+                new(0f, 0f, 0f),
+                new(0.43f, 0.03f, 0.03f),
+                new(-0.43f, 0.03f, 0.03f),
+                new(0.10f, 0.33f, 0.25f),
+                new(-0.10f, -0.25f, 0.28f),
+                new(0.33f, 0.17f, -0.30f),
+                new(-0.34f, 0.14f, -0.29f),
+                new(0.20f, -0.22f, -0.24f),
+                new(-0.22f, -0.20f, -0.22f)
             };
-            float[] radii = { 0.52f, 0.39f, 0.41f, 0.36f, 0.43f, 0.38f, 0.45f, 0.35f, 0.40f };
+
+            float[] radii = { 0.52f, 0.40f, 0.41f, 0.38f, 0.43f, 0.39f, 0.44f, 0.37f, 0.40f };
 
             for (int i = 0; i < offsets.Length; i++)
             {
@@ -115,6 +122,7 @@ namespace BioMass.Editor
                 nodeObject.name = i == 0 ? "CoreNode" : $"BiomassNode_{i:00}";
                 nodeObject.transform.SetParent(root.transform);
                 nodeObject.transform.localPosition = offsets[i];
+
                 float radius = radii[i];
                 nodeObject.transform.localScale = Vector3.one * radius * 2f;
                 nodeObject.GetComponent<Renderer>().sharedMaterial = material;
@@ -131,12 +139,14 @@ namespace BioMass.Editor
         private static void CreateCameraAndDebug(BioMassController creature)
         {
             BioMassInputReader input = creature.GetComponent<BioMassInputReader>();
+
             GameObject cameraObject = new GameObject("Main Camera");
             cameraObject.tag = "MainCamera";
             Camera camera = cameraObject.AddComponent<Camera>();
             camera.nearClipPlane = 0.08f;
             camera.fieldOfView = 67f;
             cameraObject.AddComponent<AudioListener>();
+
             BioMassCameraRig rig = cameraObject.AddComponent<BioMassCameraRig>();
             rig.Configure(creature, input);
             input.SetReferenceCamera(camera);
