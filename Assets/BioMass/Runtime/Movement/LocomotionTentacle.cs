@@ -10,18 +10,18 @@ namespace BioMass.Runtime.Movement
         private enum TentacleState { Searching, Extending, Attached, Releasing }
 
         [Header("Search")]
-        [SerializeField, Min(0.2f)] private float searchRadius = 3.1f;
-        [SerializeField, Range(8, 48)] private int searchSamples = 22;
+        [SerializeField, Min(0.2f)] private float searchRadius = 3.25f;
+        [SerializeField, Range(8, 48)] private int searchSamples = 24;
         [SerializeField] private LayerMask surfaceMask = ~0;
-        [SerializeField, Min(0f)] private float anchorSpacing = 0.8f;
+        [SerializeField, Min(0f)] private float anchorSpacing = 0.72f;
 
         [Header("Motion")]
-        [SerializeField, Min(0.1f)] private float extensionSpeed = 14f;
-        [SerializeField, Min(0f)] private float pullAcceleration = 28f;
-        [SerializeField, Min(0.05f)] private float idealPullDistance = 0.8f;
-        [SerializeField, Min(0.1f)] private float releaseDistance = 3.7f;
-        [SerializeField, Min(0.01f)] private float minHoldTime = 0.14f;
-        [SerializeField, Min(0.01f)] private float releaseTime = 0.07f;
+        [SerializeField, Min(0.1f)] private float extensionSpeed = 20f;
+        [SerializeField, Min(0f)] private float pullAcceleration = 44f;
+        [SerializeField, Min(0.05f)] private float idealPullDistance = 0.66f;
+        [SerializeField, Min(0.1f)] private float releaseDistance = 3.2f;
+        [SerializeField, Min(0.01f)] private float minHoldTime = 0.09f;
+        [SerializeField, Min(0.01f)] private float releaseTime = 0.055f;
 
         [Header("Debug Presentation")]
         [SerializeField] private LineRenderer lineRenderer;
@@ -33,14 +33,18 @@ namespace BioMass.Runtime.Movement
         private TentacleState _state;
         private Collider _anchorCollider;
         private Vector3 _anchorLocalPoint;
+        private Vector3 _anchorLocalNormal;
         private Vector3 _tip;
         private float _stateTime;
         private float _phase;
-        private readonly RaycastHit[] _searchHitBuffer = new RaycastHit[24];
+        private readonly RaycastHit[] _searchHitBuffer = new RaycastHit[32];
         private static Material s_DebugLineMaterial;
 
         public bool IsAttached => _state == TentacleState.Attached;
         public Vector3 CurrentAnchor => _anchorCollider != null ? _anchorCollider.transform.TransformPoint(_anchorLocalPoint) : _tip;
+        public Vector3 CurrentAnchorNormal => _anchorCollider != null
+            ? _anchorCollider.transform.TransformDirection(_anchorLocalNormal).normalized
+            : Vector3.up;
         public BioMassNode SourceNode => _sourceNode;
 
         private void Awake() => EnsureLineRenderer();
@@ -86,11 +90,18 @@ namespace BioMass.Runtime.Movement
             for (int i = 0; i < searchSamples; i++)
             {
                 Vector3 baseDir = FibonacciDirection((i + Mathf.RoundToInt(_phase * 17f)) % searchSamples, searchSamples);
-                Vector3 movementBiased = Vector3.Slerp(baseDir, desired.sqrMagnitude > 0.01f ? desired : -normal, 0.35f);
+                Vector3 preferredDirection = desired.sqrMagnitude > 0.01f ? desired : -normal;
+                Vector3 movementBiased = Vector3.Slerp(baseDir, preferredDirection, 0.40f);
                 Vector3 dir = movementBiased.normalized;
 
                 int hitCount = Physics.SphereCastNonAlloc(
-                    source, 0.08f, dir, _searchHitBuffer, searchRadius, surfaceMask, QueryTriggerInteraction.Ignore);
+                    source,
+                    0.08f,
+                    dir,
+                    _searchHitBuffer,
+                    searchRadius,
+                    surfaceMask,
+                    QueryTriggerInteraction.Ignore);
 
                 bool foundEnvironmentHit = false;
                 RaycastHit candidateHit = default;
@@ -121,11 +132,12 @@ namespace BioMass.Runtime.Movement
                 bestHit = candidateHit;
             }
 
-            if (bestScore < 0.25f || bestHit.collider == null)
+            if (bestScore < 0.22f || bestHit.collider == null)
                 return;
 
             _anchorCollider = bestHit.collider;
             _anchorLocalPoint = _anchorCollider.transform.InverseTransformPoint(bestHit.point);
+            _anchorLocalNormal = _anchorCollider.transform.InverseTransformDirection(bestHit.normal);
             _tip = source;
             ChangeState(TentacleState.Extending);
         }
@@ -134,11 +146,30 @@ namespace BioMass.Runtime.Movement
         {
             Vector3 to = hit.point - source;
             float distanceScore = 1f - Mathf.Clamp01(to.magnitude / searchRadius);
-            float movementScore = desired.sqrMagnitude > 0.01f ? Mathf.InverseLerp(-0.35f, 1f, Vector3.Dot(to.normalized, desired.normalized)) : 0.5f;
-            float usefulNormal = Mathf.InverseLerp(-0.5f, 1f, Vector3.Dot(hit.normal, surfaceNormal));
+
+            float movementScore = desired.sqrMagnitude > 0.01f
+                ? Mathf.InverseLerp(-0.35f, 1f, Vector3.Dot(to.normalized, desired.normalized))
+                : 0.5f;
+
+            float forwardSurfaceScore = desired.sqrMagnitude > 0.01f
+                ? Mathf.Clamp01(Vector3.Dot(desired.normalized, -hit.normal))
+                : 0f;
+
+            float currentSurfaceScore = Mathf.InverseLerp(-0.4f, 1f, Vector3.Dot(hit.normal, surfaceNormal));
+            float transitionSurfaceScore = _controller.IsSurfaceTransitioning
+                ? Mathf.Clamp01(Vector3.Dot(hit.normal, _controller.TransitionNormal))
+                : 0f;
+
             float spacingScore = _controller.GetAnchorSpacingScore(hit.point, this, anchorSpacing);
-            float noise = Mathf.PerlinNoise(_phase * 13.1f, Time.time * 0.17f) * 0.14f;
-            return distanceScore * 0.28f + movementScore * 0.42f + usefulNormal * 0.16f + spacingScore * 0.14f + noise;
+            float noise = Mathf.PerlinNoise(_phase * 13.1f, Time.time * 0.17f) * 0.10f;
+
+            return distanceScore * 0.20f
+                 + movementScore * 0.29f
+                 + forwardSurfaceScore * 0.18f
+                 + currentSurfaceScore * 0.08f
+                 + transitionSurfaceScore * 0.14f
+                 + spacingScore * 0.11f
+                 + noise;
         }
 
         private void UpdateExtension()
@@ -151,6 +182,7 @@ namespace BioMass.Runtime.Movement
 
             Vector3 anchor = CurrentAnchor;
             _tip = Vector3.MoveTowards(_tip, anchor, extensionSpeed * Time.fixedDeltaTime);
+
             if ((_tip - anchor).sqrMagnitude <= 0.02f * 0.02f)
                 ChangeState(TentacleState.Attached);
         }
@@ -173,22 +205,30 @@ namespace BioMass.Runtime.Movement
             {
                 float stretch = Mathf.Max(0f, distance - idealPullDistance);
                 float intent = _controller.DesiredWorldDirection.sqrMagnitude > 0.01f
-                    ? Mathf.Lerp(0.55f, 1.2f, Mathf.Clamp01((Vector3.Dot(toAnchor.normalized, _controller.DesiredWorldDirection) + 1f) * 0.5f))
-                    : 0.55f;
-                _sourceNode.Body.AddForceAtPosition(toAnchor.normalized * (pullAcceleration * stretch * intent), source, ForceMode.Acceleration);
+                    ? Mathf.Lerp(0.62f, 1.35f, Mathf.Clamp01((Vector3.Dot(toAnchor.normalized, _controller.DesiredWorldDirection) + 1f) * 0.5f))
+                    : 0.48f;
+
+                _sourceNode.Body.AddForceAtPosition(
+                    toAnchor.normalized * (pullAcceleration * stretch * intent),
+                    source,
+                    ForceMode.Acceleration);
             }
 
             bool behind = _controller.DesiredWorldDirection.sqrMagnitude > 0.01f &&
-                          Vector3.Dot((anchor - _controller.CenterOfMass).normalized, _controller.DesiredWorldDirection) < -0.6f;
+                          Vector3.Dot((anchor - _controller.CenterOfMass).normalized, _controller.DesiredWorldDirection) < -0.48f;
 
-            if (_stateTime >= minHoldTime && (distance > releaseDistance || behind))
+            bool wrongTransitionSurface = _controller.IsSurfaceTransitioning &&
+                                          Vector3.Dot(CurrentAnchorNormal, _controller.TransitionNormal) < 0.30f;
+
+            if (_stateTime >= minHoldTime && (distance > releaseDistance || behind || wrongTransitionSurface))
                 ChangeState(TentacleState.Releasing);
         }
 
         private void UpdateRelease()
         {
             Vector3 source = _sourceNode.Body.worldCenterOfMass;
-            _tip = Vector3.Lerp(_tip, source, 1f - Mathf.Exp(-22f * Time.fixedDeltaTime));
+            _tip = Vector3.Lerp(_tip, source, 1f - Mathf.Exp(-26f * Time.fixedDeltaTime));
+
             if (_stateTime >= releaseTime)
             {
                 _anchorCollider = null;
@@ -248,11 +288,20 @@ namespace BioMass.Runtime.Movement
             Vector3 start = _sourceNode.transform.position;
             Vector3 end = _state == TentacleState.Searching ? Vector3.Lerp(_tip, start, 0.4f) : _tip;
             lineRenderer.enabled = _controller == null || _controller.DebugPresentationEnabled;
+
             if (!lineRenderer.enabled)
                 return;
 
             lineRenderer.positionCount = lineSegments;
             Vector3 axis = end - start;
+
+            if (axis.sqrMagnitude < 0.0001f)
+            {
+                for (int i = 0; i < lineSegments; i++)
+                    lineRenderer.SetPosition(i, start);
+                return;
+            }
+
             Vector3 side = Vector3.Cross(axis.normalized, _controller != null ? _controller.SurfaceNormal : Vector3.up);
             if (side.sqrMagnitude < 0.001f)
                 side = Vector3.Cross(axis.normalized, Vector3.right);
