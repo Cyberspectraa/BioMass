@@ -2,7 +2,7 @@
 
 **bioMass** is a 3D reverse-horror game built in Unity 6.6 (6000.6.3f1). The player controls the *intent* of a sentient biological mass rather than directly animating limbs. Locomotion is generated from a small physics simulation, surface sensing, adhesion, asynchronous anchor tendrils, momentum and deformation.
 
-## Current milestone — Movement Foundation v0.1.3
+## Current milestone — Movement Foundation v0.1.4
 
 Implemented:
 
@@ -64,3 +64,18 @@ Simulation and presentation stay separate. A limited number of Rigidbody nodes a
 - Adds a `Traversal: stable/transitioning` line to the movement HUD.
 
 After updating these scripts, run **bioMass > Build / Rebuild Movement Lab** again so the scene picks up the new defaults and tighter spawn layout.
+
+
+### v0.1.4 tendrils, connective tissue and recovery
+
+- Raises Stage 1 locomotion tendrils to 10 and gives each one its own territory around the body, so anchors distribute around the biomass instead of bunching mainly in the movement direction.
+- Gives locomotion tendrils multiple deterministic curve/width profiles so they do not all render with the same shape.
+- Adds visible connective tendrils between physical biomass nodes. These visual strands follow the same node pairs used by the spring cohesion network.
+- Adds a soft leash that aggressively pulls stray biomass back before it becomes a problem.
+- If a non-core node remains beyond the hard break-off distance, it detaches, vanishes briefly, and reforms beside the core rather than leaving the player snagged on geometry.
+- Locomotion tendrils attached to a reforming node are released automatically.
+- Inbound springs are temporarily disabled during reformation to prevent the rest of the creature being yanked by the recovering node.
+- Safe reform placement probes nearby space around the core and avoids reforming directly inside environment geometry when possible.
+- The debug HUD now reports how many nodes are currently reforming.
+
+After updating, run **bioMass > Build / Rebuild Movement Lab** again so the generated test scene receives the latest serialized defaults.
