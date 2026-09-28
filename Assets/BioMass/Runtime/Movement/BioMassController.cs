@@ -197,7 +197,7 @@ namespace BioMass.Runtime.Movement
             if (_core == null)
                 return;
 
-            GameObject visualRoot = new("ConnectiveTendrils");
+            GameObject visualRoot = new GameObject("ConnectiveTendrils");
             visualRoot.transform.SetParent(transform, false);
             int connectionIndex = 0;
 
@@ -224,7 +224,7 @@ namespace BioMass.Runtime.Movement
 
         private void CreateConnectionTendril(Transform root, BioMassNode a, BioMassNode b, int index)
         {
-            GameObject go = new($"Connection_{index:00}_{a.name}_{b.name}");
+            GameObject go = new GameObject($"Connection_{index:00}_{a.name}_{b.name}");
             go.transform.SetParent(root, false);
             go.AddComponent<LineRenderer>();
 
@@ -275,7 +275,7 @@ namespace BioMass.Runtime.Movement
 
             for (int i = 0; i < locomotionTentacleCount; i++)
             {
-                GameObject go = new($"LocomotionTentacle_{i:00}");
+                GameObject go = new GameObject($"LocomotionTentacle_{i:00}");
                 go.transform.SetParent(root.transform, false);
 
                 go.AddComponent<LineRenderer>();
@@ -342,9 +342,13 @@ namespace BioMass.Runtime.Movement
 
                 if (distance >= breakOffDistance)
                 {
-                    _breakTimers[node] = _breakTimers.GetValueOrDefault(node) + Time.fixedDeltaTime;
+                    float timer = _breakTimers.TryGetValue(node, out float currentTimer)
+                        ? currentTimer
+                        : 0f;
+                    timer += Time.fixedDeltaTime;
+                    _breakTimers[node] = timer;
 
-                    if (_breakTimers[node] >= breakOffGraceTime)
+                    if (timer >= breakOffGraceTime)
                     {
                         _breakTimers[node] = 0f;
                         StartCoroutine(ReformDetachedNode(node));
@@ -370,6 +374,7 @@ namespace BioMass.Runtime.Movement
                     tentacle.ForceRelease();
             }
 
+            SetInboundSpringsForNode(node, false);
             node.BeginReform();
 
             float elapsed = 0f;
@@ -391,14 +396,34 @@ namespace BioMass.Runtime.Movement
                 Vector3 target = FindSafeReformPosition(node);
                 node.SetReformPose(target, _core.Body.rotation, 1f);
                 node.EndReform(_core.Body.linearVelocity * 0.88f);
+                SetInboundSpringsForNode(node, true);
             }
             else
             {
                 node.EndReform(Vector3.zero);
+                SetInboundSpringsForNode(node, true);
             }
 
             _breakTimers[node] = 0f;
             _reformingNodes.Remove(node);
+        }
+
+        private void SetInboundSpringsForNode(BioMassNode node, bool enabled)
+        {
+            if (node == null || node.Body == null)
+                return;
+
+            foreach (BioMassNode other in _nodes)
+            {
+                if (other == null || other == node)
+                    continue;
+
+                foreach (SpringJoint spring in other.GetComponents<SpringJoint>())
+                {
+                    if (spring != null && spring.connectedBody == node.Body)
+                        spring.enabled = enabled;
+                }
+            }
         }
 
         private Vector3 FindSafeReformPosition(BioMassNode node)
