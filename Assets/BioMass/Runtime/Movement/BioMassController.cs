@@ -56,6 +56,7 @@ namespace BioMass.Runtime.Movement
         private readonly Dictionary<BioMassNode, float> _breakTimers = new();
         private readonly HashSet<BioMassNode> _reformingNodes = new();
         private readonly Collider[] _reformOverlapBuffer = new Collider[32];
+        private readonly Dictionary<SpringJoint, SpringSnapshot> _suspendedSprings = new();
 
         private Vector3 _spawnPosition;
         private Quaternion _spawnRotation;
@@ -174,7 +175,7 @@ namespace BioMass.Runtime.Movement
                 if (node.IsReforming)
                 {
                     node.EndReform(Vector3.zero);
-                    SetInboundSpringsForNode(node, true);
+                    SetSpringsForNode(node, true);
                 }
 
                 Vector3 offset = _spawnOffsets.TryGetValue(node, out Vector3 saved) ? saved : Vector3.zero;
@@ -377,7 +378,7 @@ namespace BioMass.Runtime.Movement
                     tentacle.ForceRelease();
             }
 
-            SetInboundSpringsForNode(node, false);
+            SetSpringsForNode(node, false);
             node.BeginReform();
 
             float elapsed = 0f;
@@ -399,34 +400,75 @@ namespace BioMass.Runtime.Movement
                 Vector3 target = FindSafeReformPosition(node);
                 node.SetReformPose(target, _core.Body.rotation, 1f);
                 node.EndReform(_core.Body.linearVelocity * 0.88f);
-                SetInboundSpringsForNode(node, true);
+                SetSpringsForNode(node, true);
             }
             else
             {
                 node.EndReform(Vector3.zero);
-                SetInboundSpringsForNode(node, true);
+                SetSpringsForNode(node, true);
             }
 
             _breakTimers[node] = 0f;
             _reformingNodes.Remove(node);
         }
 
-        private void SetInboundSpringsForNode(BioMassNode node, bool enabled)
+        private void SetSpringsForNode(BioMassNode node, bool enabled)
         {
             if (node == null || node.Body == null)
                 return;
 
-            foreach (BioMassNode other in _nodes)
+            foreach (BioMassNode owner in _nodes)
             {
-                if (other == null || other == node)
+                if (owner == null)
                     continue;
 
-                foreach (SpringJoint spring in other.GetComponents<SpringJoint>())
+                foreach (SpringJoint spring in owner.GetComponents<SpringJoint>())
                 {
-                    if (spring != null && spring.connectedBody == node.Body)
-                        spring.enabled = enabled;
+                    if (spring == null)
+                        continue;
+
+                    bool belongsToNode = owner == node || spring.connectedBody == node.Body;
+                    if (!belongsToNode)
+                        continue;
+
+                    SetSpringSuspended(spring, !enabled);
                 }
             }
+        }
+
+        private void SetSpringSuspended(SpringJoint spring, bool suspended)
+        {
+            if (spring == null)
+                return;
+
+            if (suspended)
+            {
+                if (!_suspendedSprings.ContainsKey(spring))
+                {
+                    _suspendedSprings.Add(
+                        spring,
+                        new SpringSnapshot(
+                            spring.spring,
+                            spring.damper,
+                            spring.minDistance,
+                            spring.maxDistance));
+                }
+
+                spring.spring = 0f;
+                spring.damper = 0f;
+                spring.minDistance = 0f;
+                spring.maxDistance = 1000f;
+                return;
+            }
+
+            if (!_suspendedSprings.TryGetValue(spring, out SpringSnapshot snapshot))
+                return;
+
+            spring.spring = snapshot.Spring;
+            spring.damper = snapshot.Damper;
+            spring.minDistance = snapshot.MinDistance;
+            spring.maxDistance = snapshot.MaxDistance;
+            _suspendedSprings.Remove(spring);
         }
 
         private Vector3 FindSafeReformPosition(BioMassNode node)
@@ -609,6 +651,22 @@ namespace BioMass.Runtime.Movement
                     Vector3 tangential = Vector3.ProjectOnPlane(node.Body.linearVelocity, _surfaceNormal);
                     node.Body.AddForce(-tangential * velocityBrake, ForceMode.Acceleration);
                 }
+            }
+        }
+
+        private readonly struct SpringSnapshot
+        {
+            public readonly float Spring;
+            public readonly float Damper;
+            public readonly float MinDistance;
+            public readonly float MaxDistance;
+
+            public SpringSnapshot(float spring, float damper, float minDistance, float maxDistance)
+            {
+                Spring = spring;
+                Damper = damper;
+                MinDistance = minDistance;
+                MaxDistance = maxDistance;
             }
         }
 
