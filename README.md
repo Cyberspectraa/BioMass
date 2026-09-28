@@ -2,7 +2,7 @@
 
 **bioMass** is a 3D reverse-horror game built in Unity 6.6 (6000.6.3f1). The player controls the *intent* of a sentient biological mass rather than directly animating limbs. Locomotion is generated from a small physics simulation, surface sensing, adhesion, asynchronous anchor tendrils, momentum and deformation.
 
-## Current milestone — Movement Foundation v0.1.2
+## Current milestone — Movement Foundation v0.1.3
 
 Implemented:
 
@@ -53,3 +53,14 @@ The debug HUD shows raw movement input. Pressing W should display approximately 
 ## Architecture rule
 
 Simulation and presentation stay separate. A limited number of Rigidbody nodes and important tendrils perform gameplay physics. Later visual flesh, veins, secondary strands and mesh deformation will be driven from those nodes rather than becoming hundreds of extra physics bodies.
+
+### v0.1.3 traversal tuning
+
+- Raises Stage 1 target speed and acceleration so movement feels more predatory.
+- Adds explicit floor → wall → ceiling transition detection instead of relying only on an averaged nearby-surface normal.
+- Makes locomotion tendrils prefer useful surfaces ahead during a transition and release anchors left behind on the old surface.
+- Tightens spring distances and adds a compacting force around the core so Stage 1 stays clustered while still gaining stretch at speed.
+- Starts the debug biomass nodes in a tighter formation.
+- Adds a `Traversal: stable/transitioning` line to the movement HUD.
+
+After updating these scripts, run **bioMass > Build / Rebuild Movement Lab** again so the scene picks up the new defaults and tighter spawn layout.
