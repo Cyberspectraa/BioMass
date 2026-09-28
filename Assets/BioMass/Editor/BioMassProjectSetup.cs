@@ -37,7 +37,7 @@ namespace BioMass.Editor
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
             Selection.activeGameObject = creature.gameObject;
             EditorGUIUtility.PingObject(creature.gameObject);
-            Debug.Log("bioMass Movement Lab rebuilt. v0.1.3 traversal tuning active: faster Stage 1 movement, compact body and floor/wall/ceiling transitions.");
+            Debug.Log("bioMass Movement Lab rebuilt. v0.1.4 active: all-around varied locomotion tendrils, connective biomass strands and anti-stuck node reformation.");
         }
 
         private static void EnsureFolders()
