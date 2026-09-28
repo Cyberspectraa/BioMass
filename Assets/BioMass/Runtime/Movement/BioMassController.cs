@@ -10,18 +10,25 @@ namespace BioMass.Runtime.Movement
     public sealed class BioMassController : MonoBehaviour
     {
         [Header("Stage 1 Movement")]
-        [SerializeField, Min(0.1f)] private float targetSpeed = 11.5f;
-        [SerializeField, Min(0.1f)] private float coreAcceleration = 42f;
-        [SerializeField, Min(0.1f)] private float followerAcceleration = 18f;
-        [SerializeField, Min(0f)] private float adhesionAcceleration = 27f;
+        [SerializeField, Min(0.1f)] private float targetSpeed = 15f;
+        [SerializeField, Min(0.1f)] private float coreAcceleration = 72f;
+        [SerializeField, Min(0.1f)] private float followerAcceleration = 34f;
+        [SerializeField, Min(0f)] private float adhesionAcceleration = 36f;
         [SerializeField, Min(0f)] private float detachedGravity = 14f;
-        [SerializeField, Min(0f)] private float velocityBrake = 6f;
+        [SerializeField, Min(0f)] private float velocityBrake = 8f;
+
+        [Header("Surface Traversal")]
+        [SerializeField, Min(0.1f)] private float surfaceNormalSharpness = 15f;
+        [SerializeField, Min(0f)] private float cornerGripAcceleration = 34f;
 
         [Header("Body Cohesion")]
-        [SerializeField, Min(1f)] private float springStrength = 520f;
-        [SerializeField, Min(0f)] private float springDamper = 38f;
-        [SerializeField, Min(0.05f)] private float springMinDistance = 0.18f;
-        [SerializeField, Min(0.1f)] private float springMaxDistance = 1.15f;
+        [SerializeField, Min(1f)] private float springStrength = 820f;
+        [SerializeField, Min(0f)] private float springDamper = 56f;
+        [SerializeField, Min(0.05f)] private float springMinDistance = 0.10f;
+        [SerializeField, Min(0.1f)] private float springMaxDistance = 0.82f;
+        [SerializeField, Min(0.1f)] private float compactRadius = 0.62f;
+        [SerializeField, Min(0f)] private float movementStretchAllowance = 0.34f;
+        [SerializeField, Min(0f)] private float clusterAcceleration = 46f;
 
         [Header("Locomotion Tentacles")]
         [SerializeField, Range(2, 18)] private int locomotionTentacleCount = 8;
@@ -49,6 +56,9 @@ namespace BioMass.Runtime.Movement
         public Vector3 AverageVelocity => _averageVelocity;
         public float Speed => _averageVelocity.magnitude;
         public bool HasSurface => _sensor != null && _sensor.HasSurface;
+        public bool IsSurfaceTransitioning => _sensor != null && _sensor.HasTransitionSurface && MoveInput.sqrMagnitude > 0.01f;
+        public Vector3 TransitionNormal => _sensor != null ? _sensor.TransitionNormal : _surfaceNormal;
+        public Vector3 TransitionPoint => _sensor != null ? _sensor.TransitionPoint : _centerOfMass;
         public bool DebugPresentationEnabled => debugPresentationEnabled;
         public IReadOnlyList<LocomotionTentacle> Tentacles => _tentacles;
         public IReadOnlyList<BioMassNode> Nodes => _nodes;
@@ -88,16 +98,25 @@ namespace BioMass.Runtime.Movement
                 return;
 
             UpdateBodyMetrics();
-            _desiredWorldDirection = _input.GetWorldMoveDirection(_surfaceNormal);
 
-            _sensor.Sample(_core.Body.worldCenterOfMass, _desiredWorldDirection, _surfaceNormal);
-            if (_sensor.HasSurface)
-                _surfaceNormal = _sensor.SurfaceNormal;
+            Vector3 preTransitionDirection = _input.GetWorldMoveDirection(_surfaceNormal);
+            _sensor.Sample(_core.Body.worldCenterOfMass, preTransitionDirection, _surfaceNormal);
+
+            Vector3 targetNormal;
+            if (_sensor.HasTransitionSurface && preTransitionDirection.sqrMagnitude > 0.001f)
+                targetNormal = _sensor.TransitionNormal;
+            else if (_sensor.HasSurface)
+                targetNormal = _sensor.SurfaceNormal;
             else
-                _surfaceNormal = Vector3.Slerp(_surfaceNormal, Vector3.up, 0.08f).normalized;
+                targetNormal = Vector3.up;
 
+            float normalBlend = 1f - Mathf.Exp(-surfaceNormalSharpness * Time.fixedDeltaTime);
+            _surfaceNormal = Vector3.Slerp(_surfaceNormal, targetNormal, normalBlend).normalized;
             _desiredWorldDirection = _input.GetWorldMoveDirection(_surfaceNormal);
+
+            ApplyClusterCohesion();
             ApplyIntentForces();
+            ApplySurfaceTransitionAssist();
             ApplySurfaceAdhesionOrGravity();
             ApplySpeedControl();
         }
@@ -121,6 +140,8 @@ namespace BioMass.Runtime.Movement
         public void ResetCreature()
         {
             transform.SetPositionAndRotation(_spawnPosition, _spawnRotation);
+            _surfaceNormal = Vector3.up;
+
             foreach (BioMassNode node in _nodes)
             {
                 if (node == null || node.Body == null)
@@ -157,7 +178,7 @@ namespace BioMass.Runtime.Movement
                 {
                     BioMassNode previous = _nodes[i - 1];
                     if (previous != null && previous != _core && previous != node)
-                        AddSpring(node, previous, 0.72f);
+                        AddSpring(node, previous, 0.68f);
                 }
             }
         }
@@ -166,12 +187,14 @@ namespace BioMass.Runtime.Movement
         {
             SpringJoint spring = from.gameObject.AddComponent<SpringJoint>();
             spring.connectedBody = to.Body;
-            spring.autoConfigureConnectedAnchor = true;
+            spring.autoConfigureConnectedAnchor = false;
+            spring.anchor = Vector3.zero;
+            spring.connectedAnchor = Vector3.zero;
             spring.spring = springStrength * strengthScale;
             spring.damper = springDamper;
             spring.minDistance = springMinDistance;
             spring.maxDistance = springMaxDistance;
-            spring.tolerance = 0.05f;
+            spring.tolerance = 0.04f;
             spring.enableCollision = false;
             spring.enablePreprocessing = true;
         }
@@ -223,6 +246,7 @@ namespace BioMass.Runtime.Movement
             {
                 if (node == null || node.Body == null)
                     continue;
+
                 float mass = node.Body.mass;
                 totalMass += mass;
                 weightedPosition += node.Body.worldCenterOfMass * mass;
@@ -236,6 +260,31 @@ namespace BioMass.Runtime.Movement
             }
         }
 
+        private void ApplyClusterCohesion()
+        {
+            if (_core == null)
+                return;
+
+            float speed01 = Mathf.Clamp01(Speed / Mathf.Max(0.1f, targetSpeed));
+            float allowedRadius = compactRadius + movementStretchAllowance * speed01;
+            Vector3 corePosition = _core.Body.worldCenterOfMass;
+
+            foreach (BioMassNode node in _nodes)
+            {
+                if (node == _core)
+                    continue;
+
+                Vector3 toCore = corePosition - node.Body.worldCenterOfMass;
+                float distance = toCore.magnitude;
+                if (distance <= allowedRadius || distance < 0.001f)
+                    continue;
+
+                float excess = distance - allowedRadius;
+                float acceleration = Mathf.Min(clusterAcceleration, excess * clusterAcceleration * 2.2f);
+                node.Body.AddForce(toCore.normalized * acceleration, ForceMode.Acceleration);
+            }
+        }
+
         private void ApplyIntentForces()
         {
             if (_desiredWorldDirection.sqrMagnitude < 0.001f)
@@ -243,7 +292,7 @@ namespace BioMass.Runtime.Movement
 
             Vector3 desiredVelocity = _desiredWorldDirection.normalized * targetSpeed;
             Vector3 coreDelta = desiredVelocity - _core.Body.linearVelocity;
-            _core.Body.AddForce(Vector3.ClampMagnitude(coreDelta * 4.2f, coreAcceleration), ForceMode.Acceleration);
+            _core.Body.AddForce(Vector3.ClampMagnitude(coreDelta * 5.4f, coreAcceleration), ForceMode.Acceleration);
 
             foreach (BioMassNode node in _nodes)
             {
@@ -251,16 +300,43 @@ namespace BioMass.Runtime.Movement
                     continue;
 
                 Vector3 relative = node.Body.worldCenterOfMass - _centerOfMass;
-                float forwardness = Mathf.Clamp01((Vector3.Dot(relative.normalized, _desiredWorldDirection.normalized) + 1f) * 0.5f);
-                float influence = Mathf.Lerp(0.25f, 1f, forwardness);
+                float forwardness = relative.sqrMagnitude > 0.001f
+                    ? Mathf.Clamp01((Vector3.Dot(relative.normalized, _desiredWorldDirection.normalized) + 1f) * 0.5f)
+                    : 0.5f;
+
+                float influence = Mathf.Lerp(0.48f, 1f, forwardness);
                 Vector3 delta = desiredVelocity - node.Body.linearVelocity;
-                node.Body.AddForce(Vector3.ClampMagnitude(delta * 1.4f * influence, followerAcceleration), ForceMode.Acceleration);
+                node.Body.AddForce(
+                    Vector3.ClampMagnitude(delta * 2.15f * influence, followerAcceleration),
+                    ForceMode.Acceleration);
+            }
+        }
+
+        private void ApplySurfaceTransitionAssist()
+        {
+            if (!IsSurfaceTransitioning || _core == null)
+                return;
+
+            Vector3 toGrip = TransitionPoint - _core.Body.worldCenterOfMass;
+            if (toGrip.sqrMagnitude < 0.001f)
+                return;
+
+            _core.Body.AddForce(toGrip.normalized * cornerGripAcceleration, ForceMode.Acceleration);
+
+            foreach (BioMassNode node in _nodes)
+            {
+                if (node == _core)
+                    continue;
+
+                Vector3 nodeToGrip = TransitionPoint - node.Body.worldCenterOfMass;
+                if (nodeToGrip.sqrMagnitude > 0.001f)
+                    node.Body.AddForce(nodeToGrip.normalized * cornerGripAcceleration * 0.28f, ForceMode.Acceleration);
             }
         }
 
         private void ApplySurfaceAdhesionOrGravity()
         {
-            if (_sensor.HasSurface)
+            if (_sensor.HasSurface || IsSurfaceTransitioning)
             {
                 foreach (BioMassNode node in _nodes)
                     node.Body.AddForce(-_surfaceNormal * adhesionAcceleration, ForceMode.Acceleration);
@@ -277,9 +353,13 @@ namespace BioMass.Runtime.Movement
             foreach (BioMassNode node in _nodes)
             {
                 Vector3 velocity = node.Body.linearVelocity;
-                float maxSpeed = targetSpeed * 1.45f;
+                float maxSpeed = targetSpeed * 1.35f;
+
                 if (velocity.magnitude > maxSpeed)
-                    node.Body.linearVelocity = Vector3.MoveTowards(velocity, velocity.normalized * maxSpeed, velocityBrake * Time.fixedDeltaTime);
+                    node.Body.linearVelocity = Vector3.MoveTowards(
+                        velocity,
+                        velocity.normalized * maxSpeed,
+                        velocityBrake * Time.fixedDeltaTime);
 
                 if (_desiredWorldDirection.sqrMagnitude < 0.001f)
                 {
@@ -300,6 +380,12 @@ namespace BioMass.Runtime.Movement
 
             if (_sensor == null)
                 return;
+
+            if (_sensor.HasTransitionSurface)
+            {
+                Gizmos.DrawWireSphere(_sensor.TransitionPoint, 0.16f);
+                Gizmos.DrawLine(_sensor.TransitionPoint, _sensor.TransitionPoint + _sensor.TransitionNormal * 0.8f);
+            }
 
             foreach (RaycastHit hit in _sensor.LastHits)
             {
